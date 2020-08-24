@@ -50,6 +50,7 @@ export interface FormItemProps extends FormItemLabelProps, FormItemInputProps, R
   validateStatus?: ValidateStatus;
   required?: boolean;
   hidden?: boolean;
+  initialValue?: any;
 
   /** Auto passed by List render props. User should not use this. */
   fieldKey?: React.Key | React.Key[];
@@ -86,7 +87,7 @@ function FormItem(props: FormItemProps): React.ReactElement {
   } = props;
   const destroyRef = React.useRef(false);
   const { getPrefixCls } = React.useContext(ConfigContext);
-  const { name: formName } = React.useContext(FormContext);
+  const { name: formName, requiredMark } = React.useContext(FormContext);
   const { updateItemErrors } = React.useContext(FormItemContext);
   const [domErrorVisible, innerSetDomErrorVisible] = React.useState(!!help);
   const prevValidateStatusRef = React.useRef<ValidateStatus | undefined>(validateStatus);
@@ -122,12 +123,15 @@ function FormItem(props: FormItemProps): React.ReactElement {
   const updateChildItemErrors = noStyle
     ? updateItemErrors
     : (subName: string, subErrors: string[]) => {
-        if (!isEqual(inlineErrors[subName], subErrors)) {
-          setInlineErrors(prevInlineErrors => ({
-            ...prevInlineErrors,
-            [subName]: subErrors,
-          }));
-        }
+        setInlineErrors((prevInlineErrors = {}) => {
+          if (!isEqual(prevInlineErrors[subName], subErrors)) {
+            return {
+              ...prevInlineErrors,
+              [subName]: subErrors,
+            };
+          }
+          return prevInlineErrors;
+        });
       };
 
   // ===================== Children Ref =====================
@@ -139,22 +143,24 @@ function FormItem(props: FormItemProps): React.ReactElement {
     meta?: Meta,
     isRequired?: boolean,
   ): React.ReactNode {
-    if (noStyle) {
+    if (noStyle && !hidden) {
       return baseChildren;
     }
 
     // ======================== Errors ========================
+    // >>> collect sub errors
+    let subErrorList: string[] = [];
+    Object.keys(inlineErrors).forEach(subName => {
+      subErrorList = [...subErrorList, ...(inlineErrors[subName] || [])];
+    });
+
+    // >>> merged errors
     let mergedErrors: React.ReactNode[];
     if (help !== undefined && help !== null) {
       mergedErrors = toArray(help);
     } else {
       mergedErrors = meta ? meta.errors : [];
-      Object.keys(inlineErrors).forEach(subName => {
-        const subErrors = inlineErrors[subName] || [];
-        if (subErrors.length) {
-          mergedErrors = [...mergedErrors, ...subErrors];
-        }
-      });
+      mergedErrors = [...mergedErrors, ...subErrorList];
     }
 
     // ======================== Status ========================
@@ -163,7 +169,7 @@ function FormItem(props: FormItemProps): React.ReactElement {
       mergedValidateStatus = validateStatus;
     } else if (meta?.validating) {
       mergedValidateStatus = 'validating';
-    } else if (meta?.errors?.length) {
+    } else if (meta?.errors?.length || subErrorList.length) {
       mergedValidateStatus = 'error';
     } else if (meta?.touched) {
       mergedValidateStatus = 'success';
@@ -219,7 +225,13 @@ function FormItem(props: FormItemProps): React.ReactElement {
         ])}
       >
         {/* Label */}
-        <FormItemLabel htmlFor={fieldId} required={isRequired} {...props} prefixCls={prefixCls} />
+        <FormItemLabel
+          htmlFor={fieldId}
+          required={isRequired}
+          requiredMark={requiredMark}
+          {...props}
+          prefixCls={prefixCls}
+        />
         {/* Input Group */}
         <FormItemInput
           {...props}
@@ -300,14 +312,20 @@ function FormItem(props: FormItemProps): React.ReactElement {
         };
 
         let childNode: React.ReactNode = null;
+
+        devWarning(
+          !(shouldUpdate && dependencies),
+          'Form.Item',
+          "`shouldUpdate` and `dependencies` shouldn't be used together. See https://ant.design/components/form/#dependencies.",
+        );
         if (Array.isArray(children) && hasName) {
           devWarning(false, 'Form.Item', '`children` is array of render props cannot have `name`.');
           childNode = children;
-        } else if (isRenderProps && (!shouldUpdate || hasName)) {
+        } else if (isRenderProps && (!(shouldUpdate || dependencies) || hasName)) {
           devWarning(
-            !!shouldUpdate,
+            !!(shouldUpdate || dependencies),
             'Form.Item',
-            '`children` of render props only work with `shouldUpdate`.',
+            '`children` of render props only work with `shouldUpdate` or `dependencies`.',
           );
           devWarning(
             !hasName,
@@ -357,7 +375,7 @@ function FormItem(props: FormItemProps): React.ReactElement {
               {cloneElement(children, childProps)}
             </MemoInput>
           );
-        } else if (isRenderProps && shouldUpdate && !hasName) {
+        } else if (isRenderProps && (shouldUpdate || dependencies) && !hasName) {
           childNode = (children as RenderChildren)(context);
         } else {
           devWarning(
